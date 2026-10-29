@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "LGPL-3.0-only"
 publish = false
+repository = "https://github.com/denizsahin7744/distant-horizons-for-horizon-client"
 readme = "README.md"
 keywords = ["minecraft", "horizon", "lod", "distant-horizons"]
 description = "Distant Horizons' level-of-detail terrain ported to Rust, as a Horizon native mod."
