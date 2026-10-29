@@ -1878,6 +1878,22 @@ impl Settings {
     }
 }
 
+/// `/dh`'s words, for chat completion: each word after `dh` and the values
+/// it takes (none: the word alone). `Settings::command` and the bridge's
+/// `status`, `save` and `clear` accept every one of them.
+pub const COMMANDS: &[(&str, &[&str])] = &[
+    ("status", &[]),
+    ("save", &[]),
+    ("clear", &[]),
+    ("on", &[]),
+    ("off", &[]),
+    ("distance", &["64", "128", "256", "512", "1024"]),
+    ("quality", &["lowest", "low", "medium", "high", "extreme"]),
+    ("generation", &["on", "off"]),
+    ("caves", &["on", "off"]),
+    ("debug", &["on", "off"]),
+];
+
 /// `LodUtil.DEBUG_DETAIL_LEVEL_COLORS`, by data detail level.
 pub const DEBUG_DETAIL_LEVEL_COLORS: [u32; 13] = [
     0xFF0000, 0xFF7F00, 0xFFFF00, 0x7FFF00, 0x00FF00, 0x00FF7F, 0x00FFFF, 0x007FFF, 0x0000FF, 0x7F00FF, 0xFF00FF,
@@ -3059,6 +3075,35 @@ mod tests {
         assert_eq!(c.radius_chunks(), 128);
         assert!(c.command(&["quality", "extreme"]).is_some());
         assert!(c.command(&["nonsense"]).is_none());
+    }
+
+    #[test]
+    fn every_completed_command_is_one_the_mod_runs() {
+        // `status`, `save` and `clear` act on the session (bridge.rs); every
+        // other completion must change a setting.
+        for &(word, values) in COMMANDS {
+            if matches!(word, "status" | "save" | "clear") {
+                assert!(values.is_empty());
+                continue;
+            }
+            let runs = |args: &[&str]| Settings::default().command(args).is_some();
+            if values.is_empty() {
+                assert!(runs(&[word]), "{word}");
+            }
+            for value in values {
+                assert!(runs(&[word, value]), "{word} {value}");
+            }
+        }
+        // The distances offered are the settings' own.
+        let distance = COMMANDS.iter().find(|c| c.0 == "distance").unwrap().1;
+        assert_eq!(
+            distance,
+            &DISTANCES
+                .map(|d| d.to_string())
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()[..]
+        );
     }
 
     struct FakeHost {

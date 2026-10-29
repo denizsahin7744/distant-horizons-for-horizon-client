@@ -520,6 +520,7 @@ pub(super) fn frame(game: &mut Game<'_>) {
     if !game.native_window() {
         return;
     }
+    add_commands(game);
     let settings = settings(game);
     let in_world = game.renderer.is_some() && game.player.is_some() && game.title.is_none();
     // Horizon's own far terrain (Video Settings > LOD Distance) draws in the
@@ -637,6 +638,44 @@ pub(super) fn terrain_distance(value: i32) -> i32 {
     value.max(RADIUS.get())
 }
 
+/// `/dh` in the command tree the chat completes with, once the server has
+/// sent its own (in single player too: the window joins its own server).
+/// The chat's merged tree (with the WebAssembly mods' commands) is made
+/// again from it.
+fn add_commands(game: &mut Game<'_>) {
+    if !game.native_on(dh::ID) {
+        return;
+    }
+    let Some(remote) = &mut game.remote else { return };
+    let Some(tree) = remote.commands.as_ref().and_then(with_commands) else { return };
+    remote.commands = Some(tree);
+    game.merge_remote_tree();
+}
+
+/// `tree` with `/dh` and its words (`distant_horizons::COMMANDS`), for the
+/// chat's completion; the mod runs them before the tree is asked
+/// (`native_command`). Unchanged when it has them already.
+pub(super) fn with_commands(tree: &horizon_client::command::Dispatcher) -> Option<horizon_client::command::Dispatcher> {
+    use horizon_client::command::MOD_COMMAND;
+    if tree.find("dh").is_some() {
+        return None;
+    }
+    let mut d = tree.clone();
+    let root = d.literal(0, "dh");
+    d.executes(root, MOD_COMMAND);
+    for &(word, values) in dh::COMMANDS {
+        let node = d.literal(root, word);
+        if values.is_empty() {
+            d.executes(node, MOD_COMMAND);
+        }
+        for value in values {
+            let leaf = d.literal(node, value);
+            d.executes(leaf, MOD_COMMAND);
+        }
+    }
+    Some(d)
+}
+
 /// `/dh`: the status, or a setting changed.
 pub(super) fn command(game: &mut Game<'_>, command: &str) -> bool {
     let mut words = command.split_whitespace();
@@ -685,7 +724,14 @@ pub(super) fn command(game: &mut Game<'_>, command: &str) -> bool {
                 set_settings(game, settings);
                 reply
             }
-            None => "/dh [status|save|clear|on|off|distance N|quality lowest..extreme|generation on|off|caves on|off|debug on|off]".to_owned(),
+            None => format!(
+                "/dh [{}]",
+                dh::COMMANDS
+                    .iter()
+                    .map(|(w, v)| if v.is_empty() { (*w).to_owned() } else { format!("{w} {}", v.join("|")) })
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ),
         },
     };
     game.native_chat(&reply);

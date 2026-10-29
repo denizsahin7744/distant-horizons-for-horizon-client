@@ -71,7 +71,8 @@ Options > Mods > Distant Horizons > Settings:
 | Debug detail colours | Off, on: each detail level its own colour, and a status box bottom left |
 
 In chat, `/dh` shows the status; `/dh distance 512`, `/dh quality high`, `/dh generation off`, `/dh caves off`,
-`/dh debug on`, `/dh on|off`, `/dh save` and `/dh clear` (forget the LODs; they are made again).
+`/dh debug on`, `/dh on|off`, `/dh save` and `/dh clear` (forget the LODs; they are made again). Tab completes
+them, as it does the game's own commands.
 
 Horizon's own far terrain (Video Settings > LOD Distance) draws in the same place: Distant Horizons waits while it
 is on, and says so in chat once.
@@ -121,7 +122,7 @@ Where it differs from Distant Horizons, and why:
 ## Build and test
 
 ```sh
-cargo test                                                     # the core: 13 tests
+cargo test                                                     # the core: 14 tests
 cargo clippy --all-targets -- -D warnings
 python3 tools/horizon.py check --horizon ../horizon            # apply on the pinned Horizon, cargo check the game
 python3 tools/horizon.py test --horizon ../horizon             # the same tests inside the game's test binary
@@ -152,6 +153,16 @@ which are not stable hook points, so it is pinned rather than built on any Horiz
 re-pinned and checked (`bridge.rs` is where changes would go).
 
 Ported from Distant Horizons at `bbf57309` (core `7548006a`).
+
+## Credits
+
+- **Distant Horizons**, by James Seibel and its contributors: everything this port knows about level of detail
+  comes from their work. If you play Minecraft: Java Edition, use the real thing.
+- **Horizon**, by Ludovic and its contributors, and **horizon-mixins**, by levzzz5154: the game, its far-terrain
+  renderer, the native hook points and the tooling that make a mod like this possible.
+- The port was made by Deniz Şahin together with **Claude** (Claude Opus 5.5, Anthropic's AI model), which read
+  both codebases, wrote the Rust port, the Horizon bridge, the tests and the build tooling, and found and fixed its
+  bugs with Deniz testing in the game. Thank you, Claude.
 
 ## License
 

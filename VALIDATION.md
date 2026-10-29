@@ -6,7 +6,7 @@ mods, and checked again there (last section). horizon-mixins `0d6b103` throughou
 
 | Check | Result |
 |---|---|
-| `cargo test` | 13 tests pass (repeated 12 times: no flakes) |
+| `cargo test` | 14 tests pass (13 repeated 12 times: no flakes) |
 | `cargo clippy --all-targets -- -D warnings` | Pass |
 | `python3 tools/horizon.py check` | Horizon with the bundle applied type-checks; no warning from the mod's code |
 | `python3 tools/horizon.py test` | The same 13 tests pass inside Horizon's game test binary |
@@ -40,6 +40,7 @@ launcher builds):
   drawn within about 3 minutes while generation finished.
 - Through the launcher itself (`horizon-launcher native-build` of a set with Zoom and FPS Counter, release profile,
   the launcher's Rust 1.99.1): built and played by a player; `/dh` works.
+- Tab completion: `/dh qu` completes to `quality`, then its five values are offered (screenshot checked).
 - Shutting a session down finishes the changes still on their way to the coarser levels before the last save.
 
 Known limits seen in the runs:

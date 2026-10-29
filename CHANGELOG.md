@@ -11,6 +11,7 @@ First release, experimental.
 - Distant generation from Horizon's world generator in single player and on LAN hosts.
 - LODs kept on disk per world and dimension.
 - Drawn by Horizon's far-terrain renderer with block textures and biome tints; the game's own chunks cut out.
-- Settings page (Options > Mods) and `/dh` commands; a debug view colouring each detail level.
+- Settings page (Options > Mods) and `/dh` commands, completed by Tab in chat; a debug view colouring each
+  detail level.
 - Builds together with Horizon's official native mods; WebAssembly mods run beside it.
 - Pinned to Horizon `d009ebd` (Nightly 2026-10-29) and horizon-mixins `0d6b103`.
