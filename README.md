@@ -145,6 +145,12 @@ built game needs resources prepared from your own Minecraft 26.3:
 `python3 tools/proof.py --resources PATH` drives that game with `horizon-ctl` on fresh temporary folders and
 checks the mod end to end (Options > Mods, sections drawn, the view with it on and off, files saved).
 
+## Tested on
+
+Developed and tested on a **MacBook Pro with an Apple M5 chip, 16 GB of memory and 1 TB of storage**, on macOS
+with Metal. The frame rates in the screenshots and in [VALIDATION.md](VALIDATION.md) are from that machine. Linux
+and Windows builds of Horizon should work the same way, but have not been tried.
+
 ## Compatibility
 
 Pinned to Horizon `d009ebd` (the Nightly of 2026-10-29) and horizon-mixins `0d6b103` (`compatibility.json`). That

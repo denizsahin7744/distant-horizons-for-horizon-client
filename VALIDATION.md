@@ -1,6 +1,6 @@
 # Validation
 
-On macOS (Apple M5, Metal), Rust 1.97.1, 2026-10-29 and 30. The first runs below were on Horizon `7ebf7d2` (main
+On a MacBook Pro (Apple M5, 16 GB of memory, 1 TB of storage), macOS with Metal, Rust 1.97.1, 2026-10-29 and 30. The first runs below were on Horizon `7ebf7d2` (main
 at the time); the mod was then re-pinned to the Nightly `d009ebd`, 48 commits older, which still runs WebAssembly
 mods, and checked again there (last section). horizon-mixins `0d6b103` throughout.
 
