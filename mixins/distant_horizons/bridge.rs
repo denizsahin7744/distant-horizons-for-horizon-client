@@ -5,7 +5,7 @@
 // is in. Only this module knows Horizon's types; it compiles only inside the
 // game (the mod's Cargo library is runtime.rs alone).
 //
-// Part of Distant Horizons for Horizon, LGPL-3.0 (see runtime.rs).
+// Part of Distant Horizons for Horizon Client, LGPL-3.0 (see runtime.rs).
 
 use crate::game::Game;
 use crate::game::distant_horizons::{

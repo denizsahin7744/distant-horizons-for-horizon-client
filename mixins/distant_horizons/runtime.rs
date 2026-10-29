@@ -1,5 +1,5 @@
-// Distant Horizons for Horizon: the level-of-detail core of the Distant
-// Horizons mod (https://gitlab.com/distant-horizons-team/distant-horizons,
+// Distant Horizons for Horizon Client: the level-of-detail core of the
+// Distant Horizons mod (https://gitlab.com/distant-horizons-team/distant-horizons,
 // LGPL-3.0, Copyright (C) 2020 James Seibel and contributors), ported to
 // Rust. This file is both the mod's Cargo library (its tests run with
 // `cargo test`) and the module the bundle adds to Horizon's game as

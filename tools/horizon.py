@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Distant Horizons for Horizon into Horizon, test it there, package it.
+"""Build Distant Horizons for Horizon Client into Horizon, test it there, package it.
 
     python3 tools/horizon.py stage      # apply the bundle on the pinned Horizon: target/stage/
     python3 tools/horizon.py check      # ... and cargo check the game

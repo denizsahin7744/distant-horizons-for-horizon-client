@@ -1,13 +1,13 @@
-# Distant Horizons for Horizon (native mod)
+# Distant Horizons for Horizon Client
 
-A port of [Distant Horizons](https://gitlab.com/distant-horizons-team/distant-horizons)' level-of-detail
-terrain to [Horizon](https://github.com/horizon-rust/horizon), the Rust rewrite of Minecraft: Java Edition 26.3.
-It is a [horizon-mixins](https://github.com/horizon-rust/horizon-mixins) bundle that the Horizon launcher builds into
-the game, like Horizon's official native mods.
+[Distant Horizons](https://gitlab.com/distant-horizons-team/distant-horizons)' level-of-detail terrain, ported to
+Rust for the game client of [Horizon](https://github.com/horizon-rust/horizon), the Rust rewrite of Minecraft: Java
+Edition 26.3. It is a native mod: a [horizon-mixins](https://github.com/horizon-rust/horizon-mixins) bundle that the
+Horizon launcher builds into the game, like Horizon's official native mods.
 
 Not made or endorsed by the Distant Horizons team or the Horizon project. Experimental: version 0.1.0.
 
-![Badlands and mesas reaching to mountains on the horizon, drawn by Distant Horizons for Horizon](docs/screenshots/badlands-horizon.jpg)
+![Badlands and mesas reaching to mountains on the horizon, drawn by Distant Horizons for Horizon Client](docs/screenshots/badlands-horizon.jpg)
 
 ![A mesa valley with mountains beyond, far past the game's own render distance](docs/screenshots/mesa-mountains.jpg)
 
