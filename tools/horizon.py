@@ -218,6 +218,42 @@ def package():
             archive.writestr(info, content)
     print(json.dumps({"file": str(out), "size": out.stat().st_size,
                       "sha256": hashlib.sha256(out.read_bytes()).hexdigest()}, indent=2))
+    release_zip(out)
+
+
+INSTALL_TXT = """Distant Horizons for Horizon Client {version}
+
+This is a native mod: it is compiled into the game, so it can't just be dropped into a mods folder.
+The installer does every step for you, and asks before it builds anything.
+
+macOS: double-click install.command. The first time, macOS may refuse a downloaded script:
+       right-click install.command > Open > Open.
+Linux: run ./install.sh in a terminal.
+Windows: no installer yet; follow README.md (Install) on GitHub.
+
+You need the Horizon launcher, signed in with a Microsoft account that owns Minecraft: Java Edition.
+The first build takes 10 to 30 minutes. Then play the "Native mods" instance; /dh in chat shows the status.
+
+Source and documentation: https://github.com/denizsahin7744/distant-horizons-for-horizon-client
+"""
+
+
+def release_zip(hnmod):
+    """target/distant-horizons-for-horizon-client-<version>.zip: the .hnmod with the installer (both names keep
+    their execute bit) and INSTALL.txt, for players."""
+    out = TARGET / f"distant-horizons-for-horizon-client-{VERSION}.zip"
+    script = (ROOT / "tools" / "install.sh").read_bytes()
+    files = [(hnmod.name, hnmod.read_bytes(), 0o644), ("install.command", script, 0o755),
+             ("install.sh", script, 0o755), ("INSTALL.txt", INSTALL_TXT.format(version=VERSION).encode(), 0o644)]
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content, mode in files:
+            info = zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            info.external_attr = (0o100000 | mode) << 16
+            archive.writestr(info, content)
+    print(json.dumps({"file": str(out), "size": out.stat().st_size,
+                      "sha256": hashlib.sha256(out.read_bytes()).hexdigest()}, indent=2))
 
 
 def native_set(extra):

@@ -14,4 +14,6 @@ First release, experimental.
 - Settings page (Options > Mods) and `/dh` commands, completed by Tab in chat; a debug view colouring each
   detail level.
 - Builds together with Horizon's official native mods; WebAssembly mods run beside it.
+- A release zip with an installer for macOS and Linux (`install.command`, `install.sh`) that builds it through
+  the Horizon launcher.
 - Pinned to Horizon `d009ebd` (Nightly 2026-10-29) and horizon-mixins `0d6b103`.

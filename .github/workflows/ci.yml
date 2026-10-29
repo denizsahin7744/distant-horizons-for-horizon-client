@@ -29,4 +29,6 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         with:
           name: distant_horizons-hnmod
-          path: target/*.hnmod
+          path: |
+            target/*.hnmod
+            target/*.zip

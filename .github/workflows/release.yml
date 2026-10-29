@@ -25,5 +25,7 @@ jobs:
           test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, mod version $version"; exit 1; }
       - uses: softprops/action-gh-release@v2
         with:
-          files: target/*.hnmod
+          files: |
+            target/*.hnmod
+            target/*.zip
           generate_release_notes: true

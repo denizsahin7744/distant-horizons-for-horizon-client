@@ -33,9 +33,18 @@ The world past your render distance, drawn as Distant Horizons draws it:
 
 ## Install
 
-A native mod is Rust source the launcher compiles into a game of its own: it does nothing dropped into
-`horizon-mods/` (that folder is for WebAssembly `.hmod` mods). You need the Horizon launcher, the Nightly of
-2026-10-29 (`d009ebd`) installed and prepared, Python 3 and this repository.
+A native mod is Rust source the launcher compiles into a game of its own, so it can't be dropped into a folder
+like a WebAssembly `.hmod` mod: the installer does the steps for you.
+
+**With the installer (macOS, Linux):** download `distant-horizons-for-horizon-client-<version>.zip` from
+[Releases](https://github.com/denizsahin7744/distant-horizons-for-horizon-client/releases), unzip it and run
+`install.command` (macOS: double-click; the first time, right-click > Open) or `./install.sh` (Linux). It finds
+the Horizon launcher, installs and prepares the Nightly the mod is pinned to if needed, adds the native mods
+already turned on in your "Native mods" instance, asks you to confirm, and builds. Then play "Native mods".
+You need the launcher signed in with an account that owns Minecraft: Java Edition.
+
+**By hand (any system, Windows included):** you need the Horizon launcher, the Nightly of 2026-10-29
+(`d009ebd`) installed and prepared, Python 3 and this repository.
 
 1. Make the set of native mods to build: this one, and any others (their `.hnmod` files from an instance's
    `horizon-native-mods/` folder, or bundle folders):
