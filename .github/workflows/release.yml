@@ -1,0 +1,29 @@
+name: Release
+
+# Push a tag `v<version>` matching horizon-mixin.toml's version: the .hnmod is attached to a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked
+      - name: Package the .hnmod
+        run: |
+          python3 tools/horizon.py package
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("mixins/distant_horizons/horizon-mixin.toml", "rb"))["mod"]["version"])')
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, mod version $version"; exit 1; }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: target/*.hnmod
+          generate_release_notes: true

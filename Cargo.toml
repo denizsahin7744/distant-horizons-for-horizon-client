@@ -1,0 +1,17 @@
+[package]
+name = "horizon-mod-distant-horizons"
+version = "0.1.0"
+edition = "2024"
+license = "LGPL-3.0-only"
+publish = false
+readme = "README.md"
+keywords = ["minecraft", "horizon", "lod", "distant-horizons"]
+description = "Distant Horizons' level-of-detail terrain ported to Rust, as a Horizon native mod."
+
+# The mod's logic and its tests: the same file the bundle adds to the game.
+[lib]
+path = "mixins/distant_horizons/runtime.rs"
+
+[dependencies]
+# Already a dependency of horizon-client, which the injected module uses.
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
