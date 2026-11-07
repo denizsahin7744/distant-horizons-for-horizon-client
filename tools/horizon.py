@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Distant Horizons for Horizon Client into Horizon, test it there, package it.
+r"""Build Distant Horizons for Horizon Client into Horizon, test it there, package it.
 
     python3 tools/horizon.py stage      # apply the bundle on the pinned Horizon: target/stage/
     python3 tools/horizon.py check      # ... and cargo check the game
@@ -163,7 +163,7 @@ def stage(horizon, extra=()):
 def cargo(stage_dir, action):
     command = ["cargo", action, "--locked", "-p", "horizon-client"]
     if action == "test":
-        command += ["--bin", "horizon-client", "--", "distant_horizons::tests"]
+        command += ["--bin", "horizon-client", "--", "distant_horizons"]
     else:
         command += ["--bin", "horizon-client"]
     if action == "build":
@@ -190,6 +190,18 @@ def cargo(stage_dir, action):
     tail = [line for line in text.splitlines() if "Finished" in line or "test result" in line]
     log("\n".join(tail))
     return TARGET / "cargo" / "fast"
+
+
+def interop(stage_dir, address):
+    """tools/interop.rs, run in the staged Horizon against a Distant Horizons server."""
+    examples = stage_dir / "crates/horizon-client/examples"
+    examples.mkdir(exist_ok=True)
+    text = (ROOT / "tools/interop.rs").read_text().replace("@MIXINS@", str(ROOT / "mixins/distant_horizons"))
+    (examples / "dh_interop.rs").write_text(text)
+    env = dict(os.environ, CARGO_TARGET_DIR=str(TARGET / "cargo"))
+    command = ["cargo", "run", "--locked", "-p", "horizon-client", "--example", "dh_interop", "--", "--address", address]
+    result = subprocess.run(command, cwd=stage_dir, env=env)
+    sys.exit(result.returncode)
 
 
 def bundle_files():
@@ -307,7 +319,8 @@ def native_set(extra):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("action", choices=["stage", "check", "test", "build", "package", "set"])
+    parser.add_argument("action", choices=["stage", "check", "test", "build", "package", "set", "interop"])
+    parser.add_argument("--address", default="127.0.0.1:25565", help="interop: the Distant Horizons server")
     parser.add_argument("--horizon", help="a Horizon git checkout holding the pinned commit")
     parser.add_argument("--with", dest="extra", action="append", default=[], help="another native mod to build in")
     args = parser.parse_args()
@@ -320,6 +333,8 @@ def main():
     staged = stage(args.horizon, args.extra)
     if args.action == "stage":
         print(staged)
+    elif args.action == "interop":
+        interop(staged, args.address)
     elif args.action == "build":
         print(cargo(staged, "build") / "horizon-client")
     else:

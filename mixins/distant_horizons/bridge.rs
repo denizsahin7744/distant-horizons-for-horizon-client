@@ -1,13 +1,11 @@
 // Horizon's side of the Distant Horizons port, added to the game as
 // `game::distant_horizons_bridge`: the block table, chunks and world
 // generator `game::distant_horizons` reads, the meshes it makes in Horizon's
-// far-terrain format, and the session that runs it for the world the player
-// is in. Only this module knows Horizon's types; it compiles only inside the
-// game (the mod's Cargo library is runtime.rs alone).
 //
 // Part of Distant Horizons for Horizon Client, LGPL-3.0 (see runtime.rs).
 
 use crate::game::Game;
+use crate::game::distant_horizons_net as net;
 use crate::game::distant_horizons::{
     self as dh, BlockInfo, BlockTable, ChunkView, ColumnSampler, DetailPlan, Dir, FullDataSource, Host, Quad,
     RenderSettings, SampledRun, Settings,
@@ -179,6 +177,8 @@ struct Style {
 struct HorizonHost {
     context: Arc<WorkerContext>,
     blocks: BlockTable,
+    air: u32,
+    names: Mutex<HashMap<(String, String), (u16, u32)>>,
     /// The world generator, once the game has one to give.
     source: Mutex<Option<Arc<dyn LodSource>>>,
     styles: Mutex<HashMap<(u32, u8), [Option<Style>; 2]>>,
@@ -196,6 +196,23 @@ fn direction(dir: Dir) -> Direction {
 }
 
 impl HorizonHost {
+    fn resolve_name(&self, biome: &str, block: &str) -> (u16, u32) {
+        let key = (biome.to_owned(), block.to_owned());
+        if let Some(&found) = self.names.lock().unwrap().get(&key) {
+            return found;
+        }
+        let registry = self.context.assets.registry;
+        let state = net::parse_block(block).and_then(|(name, properties)| {
+            let descriptor = horizon_world::chunk::BlockState {
+                name: name.to_owned(),
+                properties: properties.into_iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect(),
+            };
+            registry.resolve(&descriptor).ok().or_else(|| registry.default_state(name))
+        });
+        let found = (self.context.biomes.id(biome), state.map_or(self.air, |s| s.0));
+        self.names.lock().unwrap().insert(key, found);
+        found
+    }
     fn styles(&self, state: u32, dir: Dir) -> [Option<Style>; 2] {
         let key = (state, dir as u8);
         if let Some(found) = self.styles.lock().unwrap().get(&key) {
@@ -400,6 +417,7 @@ struct WorldKey {
     root: PathBuf,
     dimension: &'static str,
     remote: bool,
+    server_dir: Option<PathBuf>,
 }
 
 struct Session {
@@ -423,6 +441,226 @@ thread_local! {
     /// The LOD render distance in chunks while a session runs, else 0.
     static RADIUS: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
     static NOTICE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static CONNECTION: RefCell<Option<Connection>> = const { RefCell::new(None) };
+    static SERVER_FOLDER: RefCell<Option<(String, dh::ServerFolder, String)>> = const { RefCell::new(None) };
+}
+
+const RETAIN_EVERY: Duration = Duration::from_millis(500);
+
+struct Connection {
+    address: String,
+    client: net::Client,
+    registered: bool,
+    asked: net::SessionConfig,
+    last_retain: Option<Instant>,
+    errors: u64,
+    closed_shown: bool,
+}
+
+fn joined(game: &Game<'_>) -> bool {
+    game.remote.is_some() && game.integrated.is_none()
+}
+
+fn session_config(settings: &Settings) -> net::SessionConfig {
+    let radius = settings.radius_chunks();
+    net::SessionConfig {
+        generator_plan: if settings.generation { net::GeneratorPlan::SurfaceThenChunks } else { net::GeneratorPlan::Disabled },
+        max_generation_request_distance: radius,
+        max_sync_on_load_distance: radius,
+        enable_real_time_updates: settings.real_time_updates,
+        synchronize_on_load: settings.sync_on_load,
+        player_bandwidth_limit: settings.bandwidth_kb(),
+        ..net::SessionConfig::default()
+    }
+}
+
+fn quiet_config() -> net::SessionConfig {
+    net::SessionConfig {
+        generator_plan: net::GeneratorPlan::Disabled,
+        enable_real_time_updates: false,
+        synchronize_on_load: false,
+        ..net::SessionConfig::default()
+    }
+}
+
+fn server_folder(address: &str, mode: dh::ServerFolder) -> String {
+    let cached = SERVER_FOLDER.with_borrow(|c| {
+        c.as_ref().filter(|(a, m, _)| a == address && *m == mode).map(|c| c.2.clone())
+    });
+    if let Some(folder) = cached {
+        return folder;
+    }
+    let saves = std::env::current_dir().unwrap_or_default().join("saves");
+    let listed = horizon_protocol::servers::load(&horizon_client::multiplayer::servers_file(&saves))
+        .into_iter()
+        .find(|s| s.ip == address)
+        .map(|s| s.name);
+    let (ip, port) = horizon_protocol::servers::parse_address(address).unwrap_or_else(|| (address.to_owned(), 0));
+    let port = if address.ends_with(&format!(":{port}")) { port } else { 0 };
+    let clean = |s: &str| s.chars().filter(|c| !"\\/:*?\"<>|".contains(*c)).collect::<String>();
+    let name = listed.map_or_else(|| address.replace(':', "_"), |n| clean(&n));
+    let folder = folder_name(&mode.folder(&name, &clean(&ip), port, horizon_protocol::GAME_VERSION));
+    SERVER_FOLDER.set(Some((address.to_owned(), mode, folder.clone())));
+    folder
+}
+
+fn server_dir(game: &Game<'_>, settings: &Settings, connection: Option<&Connection>, now: Instant) -> Option<PathBuf> {
+    let address = &game.remote.as_ref()?.session.address;
+    let key = connection.and_then(|c| c.client.level()).map(|l| l.server_key.as_str()).filter(|k| !k.is_empty());
+    let server = match key {
+        Some(key) => folder_name(key),
+        None => server_folder(address, settings.server_folder),
+    };
+    let root = game.native_data_dir(dh::ID).join("servers").join(server);
+    let level = match connection {
+        Some(c) => folder_name(c.client.level_name(now)?),
+        None => {
+            let dimension = folder_name(game.dim.id());
+            let suffix = format!("_{dimension}");
+            std::fs::read_dir(&root)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|e| {
+                    let name = e.file_name().into_string().ok()?;
+                    let modified = e.metadata().and_then(|m| m.modified()).ok()?;
+                    (name == dimension || name.ends_with(&suffix)).then_some((modified, name))
+                })
+                .max()
+                .map_or(dimension, |(_, name)| name)
+        }
+    };
+    Some(root.join(level))
+}
+
+fn send_payload(game: &Game<'_>, channel: &str, data: Vec<u8>) {
+    use horizon_protocol::packets::{configuration::CustomPayload, play::Serverbound};
+    game.send(Serverbound::CustomPayload(CustomPayload {
+        channel: channel.into(),
+        data,
+    }));
+}
+
+fn folder_name(name: &str) -> String {
+    let name: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .collect();
+    if name.is_empty() || name.chars().all(|c| c == '.') { "_".to_owned() } else { name }
+}
+
+impl Connection {
+    fn new(address: String, settings: &Settings) -> Self {
+        Self {
+            address,
+            client: net::Client::new(session_config(settings)),
+            registered: false,
+            asked: session_config(settings),
+            last_retain: None,
+            errors: 0,
+            closed_shown: false,
+        }
+    }
+
+    fn receive(&mut self, game: &Game<'_>, now: Instant) {
+        for data in horizon_client::distant_horizons_inbox::take() {
+            if let Err(e) = self.client.receive(&data, now) {
+                self.errors += 1;
+                if self.errors <= 5 {
+                    log::warn!("Distant Horizons: a server message could not be read: {e}");
+                }
+            }
+        }
+        if game.player.is_some() {
+            self.client.set_dimension(game.dim.id(), now);
+        }
+    }
+
+    fn configure(&mut self, settings: &Settings) {
+        let config = session_config(settings);
+        if config != self.asked {
+            self.client.reconfigure(config.clone());
+            self.asked = config;
+        }
+    }
+
+    fn flush(&mut self, game: &Game<'_>) {
+        if game.player.is_none() {
+            return;
+        }
+        let outgoing = self.client.take_outgoing();
+        if !outgoing.is_empty() && (!self.registered || !self.client.configured()) {
+            self.registered = true;
+            send_payload(game, "minecraft:register", net::CHANNEL.as_bytes().to_vec());
+        }
+        for data in outgoing {
+            send_payload(game, net::CHANNEL, data);
+        }
+    }
+
+    fn exchange(&mut self, game: &Game<'_>, session: Option<&mut Session>, now: Instant) {
+        let events = self.client.take_events();
+        match session {
+            Some(session) => {
+                for (section, timestamp) in session.engine.take_downloads() {
+                    self.client.want(section, timestamp, now);
+                }
+                if self.last_retain.is_none_or(|at| now - at >= RETAIN_EVERY) {
+                    self.last_retain = Some(now);
+                    let engine = &session.engine;
+                    self.client.retain(|s| engine.is_wanted(s));
+                }
+                let y_shift = game.remote.as_ref().map_or(0, |r| r.dimension.min_y - MIN_Y);
+                for event in events {
+                    match event {
+                        net::Event::Data { bytes, .. } => session.engine.add_source(Box::new(move |host: &HorizonHost| {
+                            let mut resolve = |biome: &str, block: &str| host.resolve_name(biome, block);
+                            net::decode_dto(&bytes, &mut resolve, y_shift, HEIGHT).ok().map(|dto| dto.source)
+                        })),
+                        net::Event::Closed(reason) if !self.closed_shown => {
+                            self.closed_shown = true;
+                            log::info!("Distant Horizons: the server ended the session: {reason}");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            None => self.client.retain(|_| false),
+        }
+        if let Some(player) = game.native_player() {
+            self.client.tick(now, [player.x, player.z]);
+        }
+        self.flush(game);
+    }
+
+    fn status(&self, now: Instant) -> String {
+        let s = self.client.stats();
+        let state = if let Some(reason) = self.client.closed() {
+            format!("closed ({reason})")
+        } else if !self.client.configured() {
+            "no answer (no Distant Horizons there?)".to_owned()
+        } else if self.client.level().is_none() {
+            match self.client.level_name(now) {
+                Some(_) => "connected, level unnamed".to_owned(),
+                None => "connected, waiting for the level".to_owned(),
+            }
+        } else {
+            format!("connected{}", if self.client.generates() { ", generating" } else { "" })
+        };
+        let mut text = format!(
+            "server {state}: {} received, {} up to date, {} waiting, {} asked, {} failed, {} KiB",
+            s.received,
+            s.up_to_date,
+            s.waiting,
+            s.in_flight,
+            s.failed,
+            s.bytes / 1024
+        );
+        if let Some(failure) = &self.client.last_failure {
+            text += &format!(" (last: {failure})");
+        }
+        text
+    }
 }
 
 pub(super) fn settings(game: &Game<'_>) -> Settings {
@@ -447,6 +685,7 @@ fn work_settings(game: &Game<'_>, settings: &Settings) -> WorkSettings {
         },
         generation: settings.generation,
         debug: settings.debug,
+        download: joined(game) && settings.server_lods,
     }
 }
 
@@ -463,6 +702,7 @@ fn generator(game: &Game<'_>) -> Option<Arc<dyn LodSource>> {
 fn start(game: &mut Game<'_>, key: WorldKey, settings: &Settings) -> Session {
     let facts = game.res.facts();
     let blocks = block_table(facts);
+    let air = facts.air.0;
     let fingerprint = fingerprint(facts);
     // The generator lives with the world: on the single player server
     // thread when there is one. A server the player joined has none here.
@@ -474,13 +714,18 @@ fn start(game: &mut Game<'_>, key: WorldKey, settings: &Settings) -> Session {
         None if game.remote.is_none() => Some(key.root.clone()),
         None => None,
     };
-    let dir = root.filter(|_| !key.remote).map(|root| {
-        let dimension = key.dimension.strip_prefix("minecraft:").unwrap_or(key.dimension);
-        root.join("data").join("DistantHorizons").join(dimension)
-    });
+    let dir = match key.remote {
+        true => key.server_dir.clone(),
+        false => root.map(|root| {
+            let dimension = key.dimension.strip_prefix("minecraft:").unwrap_or(key.dimension);
+            root.join("data").join("DistantHorizons").join(dimension)
+        }),
+    };
     let host = HorizonHost {
         context: game.pack.context.clone(),
         blocks,
+        air,
+        names: Mutex::new(HashMap::new()),
         source: Mutex::new(source),
         styles: Mutex::new(HashMap::new()),
     };
@@ -522,6 +767,40 @@ pub(super) fn frame(game: &mut Game<'_>) {
     }
     add_commands(game);
     let settings = settings(game);
+    let now = Instant::now();
+    let mut connection = CONNECTION.take();
+    if !joined(game) {
+        SERVER_FOLDER.set(None);
+    }
+    let wanted = joined(game) && game.native_on(dh::ID) && settings.enabled;
+    if !(wanted && settings.server_lods) {
+        if let Some(mut c) = connection.take() {
+            let same = game.remote.as_ref().is_some_and(|r| r.session.address == c.address);
+            if wanted && same && c.client.configured() {
+                c.client.reconfigure(quiet_config());
+                c.flush(game);
+            }
+        }
+        horizon_client::distant_horizons_inbox::take();
+    } else if let Some(remote) = &game.remote {
+        let address = remote.session.address.clone();
+        match &mut connection {
+            Some(c) if c.address == address => c.configure(&settings),
+            _ => connection = Some(Connection::new(address, &settings)),
+        }
+    }
+    if let Some(c) = &mut connection {
+        c.receive(game, now);
+    }
+    update(game, &settings, connection.as_ref(), now);
+    if let Some(c) = &mut connection {
+        SESSION.with_borrow_mut(|s| c.exchange(game, s.as_mut(), now));
+    }
+    CONNECTION.set(connection);
+}
+
+fn update(game: &mut Game<'_>, settings: &Settings, connection: Option<&Connection>, now: Instant) {
+    let settings = *settings;
     let in_world = game.renderer.is_some() && game.player.is_some() && game.title.is_none();
     // Horizon's own far terrain (Video Settings > LOD Distance) draws in the
     // same place: Distant Horizons waits while it is on.
@@ -534,8 +813,10 @@ pub(super) fn frame(game: &mut Game<'_>) {
     let key = WorldKey {
         root: game.save.root.clone(),
         dimension: game.dim.id(),
-        remote: game.remote.is_some() && game.integrated.is_none(),
+        remote: joined(game),
+        server_dir: if joined(game) { server_dir(game, &settings, connection, now) } else { None },
     };
+    let active = active && (!key.remote || key.server_dir.is_some());
     let mut session = SESSION.take();
     if let Some(s) = session.take_if(|s| !active || s.key != key) {
         stop(game, s);
@@ -554,7 +835,8 @@ pub(super) fn frame(game: &mut Game<'_>) {
         session.last_generator = Instant::now();
         *host.source.lock().unwrap() = generator(game);
     }
-    scan_chunks(game, &mut session);
+    let reread = !connection.is_some_and(|c| c.client.configured() && c.client.config.enable_real_time_updates);
+    scan_chunks(game, &mut session, reread);
     let Some(player) = game.native_player() else {
         SESSION.set(Some(session));
         return;
@@ -587,7 +869,7 @@ pub(super) fn frame(game: &mut Game<'_>) {
 }
 
 /// New and changed loaded chunks into the LODs, a few a frame.
-fn scan_chunks(game: &mut Game<'_>, session: &mut Session) {
+fn scan_chunks(game: &mut Game<'_>, session: &mut Session, reread: bool) {
     let now = Instant::now();
     if session.pending.is_empty() && session.last_scan.is_none_or(|at| now - at >= SCAN_EVERY) {
         session.last_scan = Some(now);
@@ -604,7 +886,8 @@ fn scan_chunks(game: &mut Game<'_>, session: &mut Session) {
                 // them), at most every few seconds. Its data's address also
                 // moves with light updates alone: not a reason.
                 Some(&at) => {
-                    now - at >= REREAD_EVERY
+                    reread
+                        && now - at >= REREAD_EVERY
                         && (0..chunk.sections.len() as i32)
                             .any(|sy| game.world.dirty_sections.contains(&(key.0, sy, key.1)))
                 }
@@ -692,7 +975,7 @@ pub(super) fn command(game: &mut Game<'_>, command: &str) -> bool {
                     (s.engine.stats(), generator, s.dir.clone())
                 })
             });
-            match session {
+            let reply = match session {
                 Some((s, generator, dir)) => format!(
                     "Distant Horizons {}: {} of {} sections drawn ({} faces), {} jobs queued, {} in memory, {} generated, {} chunks read; generator {}; near {} chunks around {:?}; LODs {}",
                     dh::VERSION,
@@ -706,9 +989,17 @@ pub(super) fn command(game: &mut Game<'_>, command: &str) -> bool {
                     if generator { "on" } else { "none" },
                     game.streaming.radius,
                     game.streaming.center,
-                    if dir.is_some() { "saved in the world" } else { "in memory" },
+                    match &dir {
+                        Some(dir) => format!("kept in {}", dir.display()),
+                        None => "in memory".to_owned(),
+                    },
                 ),
                 None => format!("Distant Horizons {}: not running here", dh::VERSION),
+            };
+            match CONNECTION.with_borrow(|c| c.as_ref().map(|c| c.status(Instant::now()))) {
+                Some(status) => format!("{reply}; {status}"),
+                None if joined(game) && !settings.server_lods => format!("{reply}; server LODs off"),
+                None => reply,
             }
         }
         ["save"] => {
@@ -747,10 +1038,16 @@ pub(super) fn hud(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch
     let Some(s) = SESSION.with_borrow(|s| s.as_ref().map(|s| s.engine.stats())) else {
         return;
     };
-    let lines = [
+    let mut lines = vec![
         format!("DH {}: {}/{} sections", dh::VERSION, s.shown, s.wanted),
         format!("{} queued, {} generated, {} chunks", s.queued, s.generated, s.chunks),
     ];
+    if let Some(c) = CONNECTION.with_borrow(|c| c.as_ref().map(|c| (c.client.configured(), c.client.stats()))) {
+        lines.push(match c {
+            (true, n) => format!("server: {} in, {} waiting, {} asked", n.received, n.waiting, n.in_flight),
+            (false, _) => "server: no Distant Horizons".to_owned(),
+        });
+    }
     let w = lines.iter().map(|l| game.native_text_width(l)).fold(0.0, f32::max) + 4.0;
     let h = 10.0 * lines.len() as f32 + 2.0;
     let (x, y) = corners.place(Corner::BottomLeft, w, h);

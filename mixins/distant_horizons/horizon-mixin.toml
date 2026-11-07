@@ -16,6 +16,25 @@ file = "crates/horizon-client/src/game.rs"
 name = "distant_horizons"
 source = "runtime.rs"
 
+[[module]]
+id = "codec"
+file = "crates/horizon-client/src/game.rs"
+name = "distant_horizons_codec"
+source = "codec.rs"
+
+[[module]]
+id = "net"
+file = "crates/horizon-client/src/game.rs"
+name = "distant_horizons_net"
+source = "net.rs"
+
+[[module]]
+id = "inbox"
+file = "crates/horizon-client/src/lib.rs"
+name = "distant_horizons_inbox"
+source = "inbox.rs"
+visibility = "pub"
+
 # Horizon's side: blocks, chunks, generator, meshes, the session.
 [[module]]
 id = "bridge"
@@ -92,4 +111,13 @@ bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
   { name = "batch", ty = "&mut horizon_client::hud::HudBatch", value = "&mut *batch" },
   { name = "corners", ty = "&mut horizon_client::extras_hud::Corners", value = "&mut *corners" },
+]
+
+[[injection]]
+id = "poll"
+kind = "RETURN"
+target = "horizon_client::net::Session::poll"
+helper = "poll.rs"
+bindings = [
+  { name = "value", ty = "Vec<Event>", value = "$value" },
 ]

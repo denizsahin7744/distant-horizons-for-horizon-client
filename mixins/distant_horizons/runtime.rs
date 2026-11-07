@@ -336,6 +336,13 @@ pub struct FullDataSource {
     /// Each column's `gen_step`.
     pub gen_steps: Vec<i8>,
     pub is_empty: bool,
+    pub timestamp: i64,
+}
+
+pub fn unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 /// `FullDataSourceV2.relativePosToIndex`.
@@ -355,6 +362,7 @@ impl FullDataSource {
             columns: vec![Vec::new(); COLUMNS],
             gen_steps: vec![gen_step::EMPTY; COLUMNS],
             is_empty: true,
+            timestamp: 0,
         }
     }
     pub fn column(&self, x: i32, z: i32) -> &[u64] {
@@ -372,6 +380,11 @@ impl FullDataSource {
     /// Columns with no data yet (`EMPTY`), which the generator may fill.
     pub fn missing_columns(&self) -> usize {
         self.gen_steps.iter().filter(|&&s| s == gen_step::EMPTY).count()
+    }
+    pub fn is_complete(&self) -> bool {
+        self.gen_steps
+            .iter()
+            .all(|&s| s != gen_step::EMPTY && s != gen_step::DOWN_SAMPLED)
     }
 
     /// `updateFromDataSource`: merges `input`, of this section, one of its
@@ -1651,7 +1664,8 @@ pub mod storage {
     use std::io::{Read, Write};
     use std::path::{Path, PathBuf};
 
-    const MAGIC: &[u8; 4] = b"DHH1";
+    const MAGIC: &[u8; 4] = b"DHH2";
+    const MAGIC_V1: &[u8; 4] = b"DHH1";
 
     pub fn path(dir: &Path, section: i64) -> PathBuf {
         dir.join(pos::detail_level(section).to_string())
@@ -1663,6 +1677,7 @@ pub mod storage {
     pub fn encode(source: &FullDataSource, fingerprint: u64) -> Vec<u8> {
         let mut raw = Vec::new();
         raw.extend_from_slice(&source.pos.to_le_bytes());
+        raw.extend_from_slice(&source.timestamp.to_le_bytes());
         raw.extend_from_slice(&(source.mapping.len() as u32).to_le_bytes());
         for &(biome, state) in source.mapping.entries() {
             raw.extend_from_slice(&biome.to_le_bytes());
@@ -1683,9 +1698,14 @@ pub mod storage {
     }
 
     pub fn decode(bytes: &[u8], fingerprint: u64) -> Option<FullDataSource> {
-        if bytes.len() < 12 || &bytes[..4] != MAGIC || bytes[4..12] != fingerprint.to_le_bytes() {
+        if bytes.len() < 12 || bytes[4..12] != fingerprint.to_le_bytes() {
             return None;
         }
+        let v2 = match &bytes[..4] {
+            m if m == MAGIC => true,
+            m if m == MAGIC_V1 => false,
+            _ => return None,
+        };
         let mut raw = Vec::new();
         flate2::read::ZlibDecoder::new(&bytes[12..])
             .read_to_end(&mut raw)
@@ -1698,6 +1718,9 @@ pub mod storage {
         };
         let section = i64::from_le_bytes(take(8)?.try_into().ok()?);
         let mut source = FullDataSource::empty(section);
+        if v2 {
+            source.timestamp = i64::from_le_bytes(take(8)?.try_into().ok()?);
+        }
         let entries = u32::from_le_bytes(take(4)?.try_into().ok()?);
         let mut mapping = IdMap::default();
         for _ in 0..entries {
@@ -1758,6 +1781,54 @@ pub struct Settings {
     pub cave_culling: bool,
     /// Tint each section by its detail level (`LodUtil.DEBUG_DETAIL_LEVEL_COLORS`).
     pub debug: bool,
+    pub server_lods: bool,
+    pub real_time_updates: bool,
+    pub sync_on_load: bool,
+    pub bandwidth: usize,
+    pub server_folder: ServerFolder,
+}
+
+pub const BANDWIDTHS: [i32; 6] = [0, 250, 500, 1000, 2000, 5000];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServerFolder {
+    NameOnly,
+    IpOnly,
+    NameIp,
+    NameIpPort,
+    NameIpPortVersion,
+}
+
+impl ServerFolder {
+    pub const ALL: [Self; 5] = [Self::NameOnly, Self::IpOnly, Self::NameIp, Self::NameIpPort, Self::NameIpPortVersion];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NameOnly => "name",
+            Self::IpOnly => "ip",
+            Self::NameIp => "name-ip",
+            Self::NameIpPort => "name-ip-port",
+            Self::NameIpPortVersion => "name-ip-port-version",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NameOnly => "Name only",
+            Self::IpOnly => "IP only",
+            Self::NameIp => "Name and IP",
+            Self::NameIpPort => "Name, IP and port",
+            Self::NameIpPortVersion => "Name, IP, port and MC version",
+        }
+    }
+    pub fn folder(self, name: &str, ip: &str, port: u16, version: &str) -> String {
+        let port = if port == 0 { String::new() } else { format!("-{port}") };
+        match self {
+            Self::NameOnly => name.to_owned(),
+            Self::IpOnly => ip.to_owned(),
+            Self::NameIp => format!("{name}, IP {ip}"),
+            Self::NameIpPort => format!("{name}, IP {ip}{port}"),
+            Self::NameIpPortVersion => format!("{name}, IP {ip}{port}, GameVersion {version}"),
+        }
+    }
 }
 
 /// LOD render distances, in chunks (`lodChunkRenderDistanceRadius`).
@@ -1772,6 +1843,11 @@ impl Default for Settings {
             generation: true,
             cave_culling: true,
             debug: false,
+            server_lods: true,
+            real_time_updates: true,
+            sync_on_load: true,
+            bandwidth: 2,
+            server_folder: ServerFolder::NameOnly,
         }
     }
 }
@@ -1799,6 +1875,16 @@ impl Settings {
             generation: flag("generation", d.generation),
             cave_culling: flag("cave_culling", d.cave_culling),
             debug: flag("debug", d.debug),
+            server_lods: flag("server_lods", d.server_lods),
+            real_time_updates: flag("real_time_updates", d.real_time_updates),
+            sync_on_load: flag("sync_on_load", d.sync_on_load),
+            bandwidth: get("bandwidth")
+                .and_then(|v| v.trim().parse::<i32>().ok())
+                .and_then(|v| BANDWIDTHS.iter().position(|&b| b == v))
+                .unwrap_or(d.bandwidth),
+            server_folder: get("server_folder")
+                .and_then(|v| ServerFolder::ALL.into_iter().find(|f| f.name() == v.trim()))
+                .unwrap_or(d.server_folder),
         }
     }
     pub fn stored(&self) -> Vec<(&'static str, String)> {
@@ -1809,10 +1895,24 @@ impl Settings {
             ("generation", self.generation.to_string()),
             ("cave_culling", self.cave_culling.to_string()),
             ("debug", self.debug.to_string()),
+            ("server_lods", self.server_lods.to_string()),
+            ("real_time_updates", self.real_time_updates.to_string()),
+            ("sync_on_load", self.sync_on_load.to_string()),
+            ("bandwidth", self.bandwidth_kb().to_string()),
+            ("server_folder", self.server_folder.name().to_owned()),
         ]
     }
     pub fn radius_chunks(&self) -> i32 {
         DISTANCES[self.distance]
+    }
+    pub fn bandwidth_kb(&self) -> i32 {
+        BANDWIDTHS[self.bandwidth]
+    }
+    fn bandwidth_label(&self) -> String {
+        match self.bandwidth_kb() {
+            0 => "Unlimited".to_owned(),
+            kb => format!("{kb} KB/s"),
+        }
     }
     pub fn labels(&self) -> Vec<String> {
         let on = |b: bool| if b { "ON" } else { "OFF" };
@@ -1823,6 +1923,11 @@ impl Settings {
             format!("Distant generation: {}", on(self.generation)),
             format!("Cave culling: {}", on(self.cave_culling)),
             format!("Debug detail colours: {}", on(self.debug)),
+            format!("Server LODs: {}", on(self.server_lods)),
+            format!("Real-time updates: {}", on(self.real_time_updates)),
+            format!("Sync on load: {}", on(self.sync_on_load)),
+            format!("Server bandwidth: {}", self.bandwidth_label()),
+            format!("Server folder: {}", self.server_folder.label()),
         ]
     }
     pub fn click(&mut self, button: usize) {
@@ -1839,6 +1944,14 @@ impl Settings {
             3 => self.generation = !self.generation,
             4 => self.cave_culling = !self.cave_culling,
             5 => self.debug = !self.debug,
+            6 => self.server_lods = !self.server_lods,
+            7 => self.real_time_updates = !self.real_time_updates,
+            8 => self.sync_on_load = !self.sync_on_load,
+            9 => self.bandwidth = (self.bandwidth + 1) % BANDWIDTHS.len(),
+            10 => {
+                let i = ServerFolder::ALL.iter().position(|&f| f == self.server_folder).unwrap_or(0);
+                self.server_folder = ServerFolder::ALL[(i + 1) % ServerFolder::ALL.len()];
+            }
             _ => {}
         }
     }
@@ -1860,7 +1973,19 @@ impl Settings {
                 self.quality = HorizontalQuality::ALL.into_iter().find(|h| h.name() == *q)?;
                 Some(format!("Horizontal quality: {}", self.quality.label()))
             }
-            ["generation", v] | ["caves", v] | ["debug", v] => {
+            ["bandwidth", v] => {
+                let kb = if *v == "unlimited" { 0 } else { v.parse::<i32>().ok().filter(|&kb| kb >= 0)? };
+                self.bandwidth = match kb {
+                    0 => 0,
+                    kb => BANDWIDTHS.iter().position(|&b| b >= kb).unwrap_or(BANDWIDTHS.len() - 1),
+                };
+                Some(format!("Server bandwidth: {}", self.bandwidth_label()))
+            }
+            ["folder", f] => {
+                self.server_folder = ServerFolder::ALL.into_iter().find(|m| m.name() == *f)?;
+                Some(format!("Server folder: {}", self.server_folder.label()))
+            }
+            ["generation", v] | ["caves", v] | ["debug", v] | ["server", v] | ["realtime", v] | ["sync", v] => {
                 let on = match *v {
                     "on" => true,
                     "off" => false,
@@ -1869,6 +1994,9 @@ impl Settings {
                 match args[0] {
                     "generation" => self.generation = on,
                     "caves" => self.cave_culling = on,
+                    "server" => self.server_lods = on,
+                    "realtime" => self.real_time_updates = on,
+                    "sync" => self.sync_on_load = on,
                     _ => self.debug = on,
                 }
                 Some(format!("{} {}", args[0], v))
@@ -1892,6 +2020,11 @@ pub const COMMANDS: &[(&str, &[&str])] = &[
     ("generation", &["on", "off"]),
     ("caves", &["on", "off"]),
     ("debug", &["on", "off"]),
+    ("server", &["on", "off"]),
+    ("realtime", &["on", "off"]),
+    ("sync", &["on", "off"]),
+    ("bandwidth", &["unlimited", "250", "500", "1000", "2000", "5000"]),
+    ("folder", &["name", "ip", "name-ip", "name-ip-port", "name-ip-port-version"]),
 ];
 
 /// `LodUtil.DEBUG_DETAIL_LEVEL_COLORS`, by data detail level.
@@ -1961,6 +2094,7 @@ pub mod engine {
         pub queued: usize,
         pub loaded: usize,
         pub generated: usize,
+        pub received: usize,
         pub chunks: usize,
         /// Faces in the wanted sections' meshes.
         pub quads: usize,
@@ -1977,6 +2111,7 @@ pub mod engine {
         /// Merge a section's changed children into it
         /// (`FullDataUpdatePropagatorV2`, batched as it batches them).
         Propagate(i64),
+        Source(u64),
         Save,
     }
 
@@ -2027,7 +2162,10 @@ pub mod engine {
         pub render: RenderSettings,
         pub generation: bool,
         pub debug: bool,
+        pub download: bool,
     }
+
+    pub type SourceMaker<H> = Box<dyn FnOnce(&H) -> Option<FullDataSource> + Send>;
 
     struct Shared<H: Host> {
         host: H,
@@ -2047,6 +2185,9 @@ pub mod engine {
         chunks: AtomicUsize,
         /// Jobs being worked on.
         active: AtomicUsize,
+        sources: Mutex<HashMap<u64, SourceMaker<H>>>,
+        downloads: Mutex<Vec<(i64, Option<i64>)>>,
+        received: AtomicUsize,
     }
 
     pub struct Engine<H: Host> {
@@ -2107,6 +2248,9 @@ pub mod engine {
                 chunks: AtomicUsize::new(0),
                 active: AtomicUsize::new(0),
                 quads: Mutex::new(HashMap::new()),
+                sources: Mutex::new(HashMap::new()),
+                downloads: Mutex::new(Vec::new()),
+                received: AtomicUsize::new(0),
             });
             let threads = (0..threads.max(1))
                 .map(|i| {
@@ -2168,6 +2312,34 @@ pub mod engine {
             });
             drop(q);
             self.shared.ready.notify_one();
+        }
+
+        pub fn add_source(&mut self, make: SourceMaker<H>) {
+            let id = {
+                let mut q = self.shared.queue.lock().unwrap();
+                let id = q.next_chunk;
+                q.next_chunk += 1;
+                id
+            };
+            self.shared.sources.lock().unwrap().insert(id, make);
+            push(&self.shared, Job::Source(id), -1);
+        }
+
+        pub fn take_downloads(&mut self) -> Vec<(i64, Option<i64>)> {
+            std::mem::take(&mut *self.shared.downloads.lock().unwrap())
+        }
+
+        pub fn is_wanted(&self, s: i64) -> bool {
+            let mut s = s;
+            loop {
+                if self.wanted.contains(&s) {
+                    return true;
+                }
+                if pos::detail_level(s) >= pos::ROOT_DETAIL_LEVEL {
+                    return false;
+                }
+                s = pos::parent(s);
+            }
         }
 
         /// Once a frame: plans the sections to draw around `player` (block
@@ -2311,6 +2483,7 @@ pub mod engine {
                 queued,
                 loaded: self.shared.store.lock().unwrap().sections.len(),
                 generated: self.shared.generated.load(Ordering::Relaxed),
+                received: self.shared.received.load(Ordering::Relaxed),
                 chunks: self.shared.chunks.load(Ordering::Relaxed),
                 quads: {
                     let quads = self.shared.quads.lock().unwrap();
@@ -2425,7 +2598,7 @@ pub mod engine {
                         _ => None,
                     };
                     if shared.wanted.lock().unwrap().contains(&s) {
-                        prepare(shared, s, generator);
+                        prepare(shared, s, generator, settings.download);
                         mesh(shared, s);
                     }
                     shared.queue.lock().unwrap().sections.remove(&s);
@@ -2439,6 +2612,15 @@ pub mod engine {
                 Job::Propagate(s) => {
                     let children = shared.queue.lock().unwrap().propagate.remove(&s).unwrap_or(0);
                     propagate(shared, s, children);
+                }
+                Job::Source(id) => {
+                    let make = shared.sources.lock().unwrap().remove(&id);
+                    if let Some(source) = make.and_then(|make| make(&shared.host)) {
+                        shared.received.fetch_add(1, Ordering::Relaxed);
+                        if apply(shared, source.pos, &source) {
+                            changed(shared, source.pos);
+                        }
+                    }
                 }
                 Job::Save => save_dirty(shared),
             }
@@ -2483,6 +2665,7 @@ pub mod engine {
             if !updated.update_from(input, blocks) {
                 return false;
             }
+            updated.timestamp = unix_ms();
             let mut store = shared.store.lock().unwrap();
             if store.sections.get(&target).is_some_and(|s| Arc::ptr_eq(s, &current)) {
                 store.sections.insert(target, Arc::new(updated));
@@ -2544,8 +2727,7 @@ pub mod engine {
     }
 
     /// Loads section `s`, then fills what it lacks: from its parent, scaled
-    /// up, and from the generator when there is one.
-    fn prepare<H: Host>(shared: &Shared<H>, s: i64, generator: Option<&mut dyn ColumnSampler>) {
+    fn prepare<H: Host>(shared: &Shared<H>, s: i64, generator: Option<&mut dyn ColumnSampler>, download: bool) {
         let blocks = shared.host.blocks();
         let (current, parent) = {
             let mut store = shared.store.lock().unwrap();
@@ -2555,6 +2737,10 @@ pub mod engine {
                 .flatten();
             (current, parent)
         };
+        if download {
+            let timestamp = current.is_complete().then_some(current.timestamp);
+            shared.downloads.lock().unwrap().push((s, timestamp));
+        }
         if current.missing_columns() == 0 {
             return;
         }
@@ -3046,9 +3232,25 @@ mod tests {
             z: 3,
             height: |x, z| 60 + (x + z) % 7,
         };
-        let source = create_from_chunk(&chunk, &blocks());
+        let mut source = create_from_chunk(&chunk, &blocks());
+        source.timestamp = 1_700_000_000_123;
         let bytes = storage::encode(&source, 42);
         assert_eq!(storage::decode(&bytes, 42), Some(source.clone()));
+        {
+            use std::io::{Read, Write};
+            let mut raw = Vec::new();
+            flate2::read::ZlibDecoder::new(&bytes[12..]).read_to_end(&mut raw).unwrap();
+            raw.drain(8..16);
+            let mut v1 = b"DHH1".to_vec();
+            v1.extend_from_slice(&42u64.to_le_bytes());
+            let mut z = flate2::write::ZlibEncoder::new(v1, flate2::Compression::fast());
+            z.write_all(&raw).unwrap();
+            let old = FullDataSource {
+                timestamp: 0,
+                ..source.clone()
+            };
+            assert_eq!(storage::decode(&z.finish().unwrap(), 42), Some(old));
+        }
         assert_eq!(storage::decode(&bytes, 43), None);
         assert_eq!(storage::decode(&bytes[..bytes.len() - 4], 42), None);
         let dir = std::env::temp_dir().join(format!("dh-test-{}", std::process::id()));
@@ -3063,18 +3265,37 @@ mod tests {
         s.click(1);
         s.click(2);
         s.click(5);
+        for b in [6, 8, 9, 10, 10] {
+            s.click(b);
+        }
         let stored: std::collections::HashMap<_, _> = s.stored().into_iter().collect();
         let read = Settings::read(|k| stored.get(k).cloned());
         assert_eq!(read, s);
         assert_eq!(read.radius_chunks(), 512);
         assert_eq!(read.quality, HorizontalQuality::High);
         assert!(read.debug);
+        assert!(!read.server_lods && read.real_time_updates && !read.sync_on_load);
+        assert_eq!(read.bandwidth_kb(), 1000);
+        assert_eq!(read.server_folder, ServerFolder::NameIp);
+        assert_eq!(Settings::default().bandwidth_kb(), 500);
         assert_eq!(Settings::read(|_| Some("junk".into())), Settings::default());
         let mut c = Settings::default();
         assert!(c.command(&["distance", "100"]).is_some());
         assert_eq!(c.radius_chunks(), 128);
         assert!(c.command(&["quality", "extreme"]).is_some());
         assert!(c.command(&["nonsense"]).is_none());
+        assert!(c.command(&["bandwidth", "300"]).is_some());
+        assert_eq!(c.bandwidth_kb(), 500);
+        assert!(c.command(&["bandwidth", "unlimited"]).is_some());
+        assert_eq!(c.bandwidth_kb(), 0);
+        assert!(c.command(&["bandwidth", "-1"]).is_none());
+        let f = |m: ServerFolder| m.folder("My Server", "example.org", 25566, "26.3");
+        assert_eq!(f(ServerFolder::NameOnly), "My Server");
+        assert_eq!(f(ServerFolder::IpOnly), "example.org");
+        assert_eq!(f(ServerFolder::NameIp), "My Server, IP example.org");
+        assert_eq!(f(ServerFolder::NameIpPort), "My Server, IP example.org-25566");
+        assert_eq!(f(ServerFolder::NameIpPortVersion), "My Server, IP example.org-25566, GameVersion 26.3");
+        assert_eq!(ServerFolder::NameIpPort.folder("a", "b", 0, "26.3"), "a, IP b");
     }
 
     #[test]
@@ -3148,6 +3369,7 @@ mod tests {
                 min_y: -64,
             },
             generation: true,
+            download: false,
             debug: false,
         };
         let dir = std::env::temp_dir().join(format!("dh-engine-{}", std::process::id()));
@@ -3196,6 +3418,71 @@ mod tests {
         assert!(files("6") > 0);
         // The chunks reached the coarsest level.
         assert!(files("14") > 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_engine_lists_downloads_and_takes_sources() {
+        let settings = engine::WorkSettings {
+            render: RenderSettings {
+                cave_culling: true,
+                cave_culling_height: 60,
+                min_y: -64,
+            },
+            generation: false,
+            download: true,
+            debug: false,
+        };
+        let dir = std::env::temp_dir().join(format!("dh-download-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let plan = DetailPlan::new(HorizontalQuality::Low, 32);
+        let settle = |e: &mut engine::Engine<FakeHost>| {
+            let start = std::time::Instant::now();
+            let mut downloads = Vec::new();
+            while start.elapsed() < std::time::Duration::from_secs(30) {
+                e.update([8.0, 8.0], plan, engine::Near::default());
+                downloads.extend(e.take_downloads());
+                if e.stats().wanted > 0 && e.stats().queued == 0 && downloads.len() >= e.stats().wanted {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            downloads
+        };
+        let target;
+        {
+            let mut e = engine::Engine::new(FakeHost { blocks: blocks() }, Some(dir.clone()), 1, settings, 2);
+            let downloads = settle(&mut e);
+            assert_eq!(downloads.len(), e.stats().wanted);
+            assert!(downloads.iter().all(|(_, t)| t.is_none()));
+            target = downloads[0].0;
+            assert!(e.is_wanted(target) && e.is_wanted(pos::child(target, 2)));
+            assert!(!e.is_wanted(pos::encode(6, 100_000, 0)));
+            e.add_source(Box::new(move |host: &FakeHost| {
+                let mut source = FullDataSource::empty(target);
+                let id = source.mapping.add_if_not_present(1, STONE);
+                for x in 0..pos::WIDTH {
+                    for z in 0..pos::WIDTH {
+                        let p = full_point::encode(id, 70, 0, 0, 15).unwrap();
+                        source.set_column(x, z, vec![p], gen_step::FEATURES);
+                    }
+                }
+                let _ = host.blocks();
+                Some(source)
+            }));
+            let start = std::time::Instant::now();
+            while e.stats().received == 0 || e.stats().queued > 0 {
+                assert!(start.elapsed() < std::time::Duration::from_secs(30));
+                e.update([8.0, 8.0], plan, engine::Near::default());
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        let saved = storage::load(&dir, target, 1).unwrap();
+        assert!(saved.is_complete() && saved.timestamp > 0);
+        let mut e = engine::Engine::new(FakeHost { blocks: blocks() }, Some(dir.clone()), 1, settings, 2);
+        let downloads = settle(&mut e);
+        assert!(downloads.contains(&(target, Some(saved.timestamp))));
+        drop(e);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

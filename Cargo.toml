@@ -9,9 +9,8 @@ readme = "README.md"
 keywords = ["minecraft", "horizon", "lod", "distant-horizons"]
 description = "Distant Horizons' level-of-detail terrain ported to Rust, as a Horizon native mod."
 
-# The mod's logic and its tests: the same file the bundle adds to the game.
 [lib]
-path = "mixins/distant_horizons/runtime.rs"
+path = "src/lib.rs"
 
 [dependencies]
 # Already a dependency of horizon-client, which the injected module uses.
