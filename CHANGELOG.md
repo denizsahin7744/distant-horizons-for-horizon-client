@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 (2026-11-08)
+
+- Builds on Horizon `6475f62` (Nightly 2026-11-04) with horizon-mixins `5a64af9`, the commit Mod Menu 0.3.3 and
+  other registry mods pin: on it `Remote::commands` and `Game::merge_remote_tree` are gone, which failed every
+  player's native build that had this mod in it (#2).
+- `/dh` reaches the chat's command tree through the `native_commands` hook (API 35) instead of editing the tree the
+  server sent; the chat box still colours and completes `/dh`, no longer its words. Based on #1 by marshaaaal.
+
 ## 0.1.0 (2026-10-30)
 
 First release, experimental.

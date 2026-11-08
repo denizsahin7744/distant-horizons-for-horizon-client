@@ -10,7 +10,7 @@
 # It changes nothing until you type "yes". LGPL-3.0, part of Distant Horizons for Horizon Client.
 set -euo pipefail
 
-NIGHTLY="nightly-2026-11-01-c9d474d"
+NIGHTLY="nightly-2026-11-04-6475f62"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 say() { printf '%s\n' "$*"; }

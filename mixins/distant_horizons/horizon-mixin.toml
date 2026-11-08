@@ -1,13 +1,13 @@
 [mod]
 id = "distant_horizons"
-version = "0.1.0"
+version = "0.1.1"
 priority = 100
 
 # The commit it was built and tested on. Besides the native hook points it
 # reads Horizon's chunks, world generator and renderer, and widens
 # `terrain_distance`: it is pinned to this commit.
 [compatibility]
-horizon_revision = "aa27eca326db26e999d4e59d7899576016764b1e"
+horizon_revision = "6475f62f3c834b7489e1816bf47f47ea5eb2b879"
 
 # The Distant Horizons core, Horizon-free (also the Cargo library).
 [[module]]
