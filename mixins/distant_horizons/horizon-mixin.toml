@@ -1,13 +1,13 @@
 [mod]
 id = "distant_horizons"
-version = "0.1.0"
+version = "0.1.1"
 priority = 100
 
 # The commit it was built and tested on. Besides the native hook points it
 # reads Horizon's chunks, world generator and renderer, and widens
 # `terrain_distance`: it is pinned to this commit.
 [compatibility]
-horizon_revision = "d009ebd140476b5bdc958c00f56a75e82abec691"
+horizon_revision = "6475f62f3c834b7489e1816bf47f47ea5eb2b879"
 
 # The Distant Horizons core, Horizon-free (also the Cargo library).
 [[module]]
@@ -81,6 +81,16 @@ bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
   { name = "command", ty = "&str", value = "command" },
   { name = "ran", ty = "&mut bool", value = "&mut *ran" },
+]
+
+[[injection]]
+id = "commands"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_commands"
+helper = "commands.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "commands", ty = "&mut Vec<&'static str>", value = "&mut *commands" },
 ]
 
 [[injection]]

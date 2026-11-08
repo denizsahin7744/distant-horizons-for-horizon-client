@@ -43,8 +43,8 @@ the Horizon launcher, installs and prepares the Nightly the mod is pinned to if 
 already turned on in your "Native mods" instance, asks you to confirm, and builds. Then play "Native mods".
 You need the launcher signed in with an account that owns Minecraft: Java Edition.
 
-**By hand (any system, Windows included):** you need the Horizon launcher, the Nightly of 2026-10-29
-(`d009ebd`) installed and prepared, Python 3 and this repository.
+**By hand (any system, Windows included):** you need the Horizon launcher, the Nightly of 2026-11-04
+(`6475f62`) installed and prepared, Python 3 and this repository.
 
 1. Make the set of native mods to build: this one, and any others (their `.hnmod` files from an instance's
    `horizon-native-mods/` folder, or bundle folders):
@@ -59,16 +59,16 @@ You need the launcher signed in with an account that owns Minecraft: Java Editio
 
    ```sh
    horizon-launcher native-build target/native-set --instance native-mods \
-     --version nightly-2026-10-29-d009ebd --trust-native-code
+     --version nightly-2026-11-04-6475f62 --trust-native-code
    ```
 
    On macOS the launcher is `/Applications/Horizon.app/Contents/MacOS/horizon-launcher`. The first build
    downloads the launcher's own Rust and takes 10 to 30 minutes; later ones a few. `--version` names a prepared
-   version; if it says one is "not prepared", pass the `d009ebd` Nightly as here.
+   version; if it says one is "not prepared", pass the `6475f62` Nightly as here.
 3. Play the "Native mods" instance. Options > Mods lists Distant Horizons; `/dh` in chat shows its status. Far
    terrain fills in over the first minutes in a new world, and loads from disk after.
 
-WebAssembly mods (Mod Menu...) keep working beside it, from the instance's `horizon-mods/` folder.
+Other native mods (Mod Menu...) build into the same game: install them in the same instance.
 
 ## Use it
 
@@ -162,10 +162,13 @@ and Windows builds of Horizon should work the same way, but have not been tried.
 
 ## Compatibility
 
-Pinned to Horizon `d009ebd` (the Nightly of 2026-10-29) and horizon-mixins `0d6b103` (`compatibility.json`). That
-Horizon still has the WebAssembly mods' runtime, so `.hmod` mods run beside it, and Horizon's official native mods
-(Minimap, Zoom, FPS Counter, Keystrokes, Recipes, Coordinates HUD) build into the same game: all of them were
-checked together in a running game.
+Pinned to Horizon `6475f62` (the Nightly of 2026-11-04) and horizon-mixins `5a64af9` (`compatibility.json`), the
+commit other registry mods (Mod Menu 0.3.3 among them) pin, so a player's set builds on it. That Horizon no longer has
+the WebAssembly mods' runtime: Mod Menu and the other former `.hmod` code mods are native mods now, and build into the
+same game as this one. `/dh` reaches the chat's tree through the `native_commands` hook (API 35), so the chat box
+colours and completes `/dh`; its words (`/dh quality ...`) are no longer completed by Tab. The earlier pin, `d009ebd`,
+was checked together with Horizon's official native mods (Minimap, Zoom, FPS Counter, Keystrokes, Recipes,
+Coordinates HUD) in a running game.
 
 Unlike those official mods it reads the game's chunks, world generator and renderer and hooks `terrain_distance`,
 which are not stable hook points, so it is pinned rather than built on any Horizon: a newer Nightly needs it
