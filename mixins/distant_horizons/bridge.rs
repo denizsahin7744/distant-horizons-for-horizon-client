@@ -638,18 +638,17 @@ pub(super) fn terrain_distance(value: i32) -> i32 {
     value.max(RADIUS.get())
 }
 
-/// `/dh` in the command tree the chat completes with, once the server has
-/// sent its own (in single player too: the window joins its own server).
-/// The chat's merged tree (with the WebAssembly mods' commands) is made
-/// again from it.
+/// `/dh` in the command tree the chat completes with (`Remote::chat_tree`,
+/// the server's tree once it has sent one, in single player too: the window
+/// joins its own server). The game builds that tree again when the server
+/// sends a new one, and `/dh` goes back into it then.
 fn add_commands(game: &mut Game<'_>) {
     if !game.native_on(dh::ID) {
         return;
     }
     let Some(remote) = &mut game.remote else { return };
-    let Some(tree) = remote.commands.as_ref().and_then(with_commands) else { return };
-    remote.commands = Some(tree);
-    game.merge_remote_tree();
+    let Some(tree) = with_commands(&remote.chat_tree) else { return };
+    remote.chat_tree = tree;
 }
 
 /// `tree` with `/dh` and its words (`distant_horizons::COMMANDS`), for the
