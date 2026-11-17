@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- LODs from servers running Distant Horizons: the client side of its networking (protocol 16, the 3.3 releases)
+  on the `distant_horizons:msg` plugin channel. The session config and level key handshake, full data requests
+  for the sections in view (nearest first, within the server's rate and distance limits, split when the server
+  asks, re-asked for what it has when it generates nothing), split transfers, real-time partial updates.
+- Distant Horizons' network data read as it writes it (`FullDataSourceV2DTO`, both formats), with Zstandard and
+  LZ4 frame decoders of the mod's own; block states and biomes matched to Horizon's by name, Nether and End
+  heights moved to Horizon's.
+- A "Server LODs" setting and `/dh server on|off`; `/dh` shows the server's status and what it sent.
+
 ## 0.1.0 (2026-10-30)
 
 First release, experimental.

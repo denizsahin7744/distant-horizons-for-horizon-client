@@ -23,6 +23,17 @@ file = "crates/horizon-client/src/game.rs"
 name = "distant_horizons_bridge"
 source = "bridge.rs"
 
+# The network events of each frame, before the game handles them: Distant
+# Horizons' to the inbox.
+[[injection]]
+id = "events"
+kind = "RETURN"
+target = "horizon_client::net::Session::poll"
+helper = "events.rs"
+bindings = [
+  { name = "value", ty = "Vec<Event>", value = "$value" },
+]
+
 [[injection]]
 id = "frame"
 kind = "HEAD"
@@ -93,3 +104,12 @@ bindings = [
   { name = "batch", ty = "&mut horizon_client::hud::HudBatch", value = "&mut *batch" },
   { name = "corners", ty = "&mut horizon_client::extras_hud::Corners", value = "&mut *corners" },
 ]
+
+# Distant Horizons' messages from a server (its LODs), in Horizon's library:
+# taken out of the network events, for the bridge.
+[[module]]
+id = "inbox"
+file = "crates/horizon-client/src/lib.rs"
+name = "distant_horizons_inbox"
+source = "inbox.rs"
+visibility = "pub"

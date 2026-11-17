@@ -182,6 +182,12 @@ struct HorizonHost {
     /// The world generator, once the game has one to give.
     source: Mutex<Option<Arc<dyn LodSource>>>,
     styles: Mutex<HashMap<(u32, u8), [Option<Style>; 2]>>,
+    air: u32,
+    /// A Distant Horizons server's block state names, resolved.
+    states: Mutex<HashMap<String, u32>>,
+    /// The server's minimum y less the game's (`MIN_Y`, the same in every
+    /// dimension here; vanilla's Nether and End start at 0).
+    y_offset: i32,
 }
 
 fn direction(dir: Dir) -> Direction {
@@ -330,6 +336,42 @@ impl Host for HorizonHost {
         mesh.sort_solid();
         mesh
     }
+    fn resolve(&self, biome: &str, block: &str) -> (u16, u32) {
+        let biomes = &self.context.biomes.index;
+        let biome = biomes
+            .get(biome)
+            .or_else(|| biomes.get("minecraft:plains"))
+            .copied()
+            .unwrap_or(0);
+        if let Some(&state) = self.states.lock().unwrap().get(block) {
+            return (biome, state);
+        }
+        let state = match dh::net::parse_block_state(block) {
+            None => self.air,
+            Some((name, properties)) => {
+                let registry = self.context.assets.registry;
+                let descriptor = horizon_world::chunk::BlockState {
+                    name: name.to_owned(),
+                    properties: properties
+                        .iter()
+                        .map(|&(k, v)| (k.to_owned(), v.to_owned()))
+                        .collect(),
+                };
+                // A property this registry lacks (another version's):
+                // the block's default state; an unknown block: air.
+                registry
+                    .resolve(&descriptor)
+                    .ok()
+                    .or_else(|| registry.default_state(name))
+                    .map_or(self.air, |s| s.0)
+            }
+        };
+        self.states.lock().unwrap().insert(block.to_owned(), state);
+        (biome, state)
+    }
+    fn remote_y_offset(&self) -> i32 {
+        self.y_offset
+    }
 }
 
 struct Face {
@@ -404,6 +446,8 @@ struct WorldKey {
 
 struct Session {
     key: WorldKey,
+    /// On a server: its Distant Horizons, asked for its LODs.
+    net: Option<dh::net::Client>,
     /// Where the sections are kept; none: in memory.
     dir: Option<PathBuf>,
     last_generator: Instant,
@@ -483,6 +527,12 @@ fn start(game: &mut Game<'_>, key: WorldKey, settings: &Settings) -> Session {
         blocks,
         source: Mutex::new(source),
         styles: Mutex::new(HashMap::new()),
+        air: facts.air.0,
+        states: Mutex::new(HashMap::new()),
+        y_offset: match key.dimension {
+            "minecraft:the_nether" | "minecraft:the_end" => -MIN_Y,
+            _ => 0,
+        },
     };
     let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
     let engine = Engine::new(host, dir.clone(), fingerprint, work_settings(game, settings), dh::engine::worker_threads(cores));
@@ -492,6 +542,7 @@ fn start(game: &mut Game<'_>, key: WorldKey, settings: &Settings) -> Session {
     }
     Session {
         key,
+        net: None,
         dir,
         engine,
         seen: HashMap::new(),
@@ -571,6 +622,7 @@ pub(super) fn frame(game: &mut Game<'_>) {
     };
     let plan = DetailPlan::new(settings.quality, settings.radius_chunks());
     let (meshes, removed) = session.engine.update([player.x, player.z], plan, near);
+    exchange(game, &mut session, &settings, [player.x, player.z]);
     if let Some(renderer) = &mut game.renderer {
         let mut tiles = Vec::with_capacity(meshes.len());
         let mut gone: Vec<TileKey> = removed.into_iter().map(tile).collect();
@@ -584,6 +636,43 @@ pub(super) fn frame(game: &mut Game<'_>) {
         renderer.upload_lods(UPLOAD_BUDGET);
     }
     SESSION.set(Some(session));
+}
+
+/// Distant Horizons' channel to the server: its messages to send, and the
+/// sections it sent into the LODs. Started on a server the player joined
+/// (not in single player or on a LAN host, whose world is here).
+fn exchange(game: &mut Game<'_>, session: &mut Session, settings: &Settings, player: [f64; 2]) {
+    use horizon_protocol::packets::{configuration::CustomPayload, play::Serverbound};
+    if !settings.server || !session.key.remote {
+        session.net = None;
+        horizon_client::distant_horizons_inbox::take();
+        return;
+    }
+    let now = Instant::now();
+    let received = horizon_client::distant_horizons_inbox::take();
+    let net = session.net.get_or_insert_with(|| {
+        // `minecraft:register`: the channel this client listens on, as a
+        // modded client says it (a Fabric server sends only to those).
+        game.send(Serverbound::CustomPayload(CustomPayload {
+            channel: "minecraft:register".into(),
+            data: dh::net::CHANNEL.as_bytes().to_vec(),
+        }));
+        log::info!("Distant Horizons: asking the server for its LODs");
+        dh::net::Client::new(session.key.dimension, now)
+    });
+    for data in &received {
+        net.receive(data, now);
+    }
+    net.tick(now, &session.engine.wanted_sections(), player);
+    for dto in net.take_sections() {
+        session.engine.add_remote(dto);
+    }
+    for data in net.take_outgoing() {
+        game.send(Serverbound::CustomPayload(CustomPayload {
+            channel: dh::net::CHANNEL.into(),
+            data,
+        }));
+    }
 }
 
 /// New and changed loaded chunks into the LODs, a few a frame.
@@ -689,11 +778,24 @@ pub(super) fn command(game: &mut Game<'_>, command: &str) -> bool {
             let session = SESSION.with_borrow(|s| {
                 s.as_ref().map(|s| {
                     let generator = s.engine.host().source.lock().unwrap().is_some();
-                    (s.engine.stats(), generator, s.dir.clone())
+                    let server = s.net.as_ref().map(|n| {
+                        let mut line = n.describe();
+                        let stats = s.engine.stats();
+                        line += &format!("; {} merged", stats.received);
+                        if stats.unreadable > 0 {
+                            line += &format!(
+                                ", {} unreadable ({})",
+                                stats.unreadable,
+                                s.engine.last_unreadable().unwrap_or_default()
+                            );
+                        }
+                        line
+                    });
+                    (s.engine.stats(), generator, s.dir.clone(), server)
                 })
             });
             match session {
-                Some((s, generator, dir)) => format!(
+                Some((s, generator, dir, server)) => format!(
                     "Distant Horizons {}: {} of {} sections drawn ({} faces), {} jobs queued, {} in memory, {} generated, {} chunks read; generator {}; near {} chunks around {:?}; LODs {}",
                     dh::VERSION,
                     s.shown,
@@ -707,7 +809,7 @@ pub(super) fn command(game: &mut Game<'_>, command: &str) -> bool {
                     game.streaming.radius,
                     game.streaming.center,
                     if dir.is_some() { "saved in the world" } else { "in memory" },
-                ),
+                ) + &server.map(|l| format!("\n{l}")).unwrap_or_default(),
                 None => format!("Distant Horizons {}: not running here", dh::VERSION),
             }
         }
@@ -744,13 +846,21 @@ pub(super) fn hud(game: &mut Game<'_>, batch: &mut horizon_client::hud::HudBatch
     if !game.native_on(dh::ID) || !settings(game).debug || !game.native_corner_shown(Corner::BottomLeft) {
         return;
     }
-    let Some(s) = SESSION.with_borrow(|s| s.as_ref().map(|s| s.engine.stats())) else {
+    let Some((s, server)) = SESSION.with_borrow(|s| {
+        s.as_ref().map(|s| {
+            let server = s.net.as_ref().map(|n| (n.received, n.in_flight()));
+            (s.engine.stats(), server)
+        })
+    }) else {
         return;
     };
-    let lines = [
+    let mut lines = vec![
         format!("DH {}: {}/{} sections", dh::VERSION, s.shown, s.wanted),
         format!("{} queued, {} generated, {} chunks", s.queued, s.generated, s.chunks),
     ];
+    if let Some((received, in_flight)) = server {
+        lines.push(format!("server: {received} received, {in_flight} asked"));
+    }
     let w = lines.iter().map(|l| game.native_text_width(l)).fold(0.0, f32::max) + 4.0;
     let h = 10.0 * lines.len() as f32 + 2.0;
     let (x, y) = corners.place(Corner::BottomLeft, w, h);

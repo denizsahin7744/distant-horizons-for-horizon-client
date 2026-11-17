@@ -21,6 +21,10 @@ The world past your render distance, drawn as Distant Horizons draws it:
 - **Distant generation.** In single player and as a LAN host, sections you haven't visited are sampled from the
   world generator, one column per data point, at the section's own detail level. Visited chunks always replace
   generated data (generation steps, as in Distant Horizons).
+- **From a server with Distant Horizons.** On a server running Distant Horizons (Fabric, NeoForge, Forge: 3.3.x,
+  network protocol 16), the sections you should see are asked of it, nearest first, within its rate and distance
+  limits, as Distant Horizons' own client asks: its pre-generated LODs stream in, and it generates the rest if its
+  config lets it. Its block states and biomes are matched to Horizon's by name.
 - **Detail drops with distance** by Distant Horizons' rule: `log(distance / unit) / log(base)`, with its five
   horizontal-quality presets.
 - **Kept on disk**, per world and dimension, in `<world>/data/DistantHorizons/<dimension>/`, so a world loads its
@@ -82,9 +86,10 @@ Options > Mods > Distant Horizons > Settings:
 | Distant generation | **On**, off |
 | Cave culling | **On**, off |
 | Debug detail colours | Off, on: each detail level its own colour, and a status box bottom left |
+| Server LODs | **On**, off: ask a server with Distant Horizons for its LODs |
 
 In chat, `/dh` shows the status; `/dh distance 512`, `/dh quality high`, `/dh generation off`, `/dh caves off`,
-`/dh debug on`, `/dh on|off`, `/dh save` and `/dh clear` (forget the LODs; they are made again). Tab completes
+`/dh debug on`, `/dh server off`, `/dh on|off`, `/dh save` and `/dh clear` (forget the LODs; they are made again). Tab completes
 them, as it does the game's own commands.
 
 Horizon's own far terrain (Video Settings > LOD Distance) draws in the same place: Distant Horizons waits while it
@@ -96,8 +101,9 @@ is on, and says so in chat once.
 |---|---|
 | `mixins/distant_horizons/runtime.rs` | The Distant Horizons core in Rust, knowing nothing of Horizon; also this crate's library, for its tests. Added to the game as `game::distant_horizons` |
 | `mixins/distant_horizons/bridge.rs` | Horizon's side: block table, chunk and generator adapters, meshes in Horizon's far-terrain format, the session per world. Added as `game::distant_horizons_bridge` |
+| `mixins/distant_horizons/inbox.rs` | Distant Horizons' messages from a server, taken out of Horizon's network events. Added to Horizon's library as `horizon_client::distant_horizons_inbox` |
 | `mixins/distant_horizons/*.rs` (others) | One small helper per hook |
-| `mixins/distant_horizons/horizon-mixin.toml` | The bundle: two modules, seven HEAD hooks on Horizon's native hook points, and one RETURN hook on `Game::terrain_distance`, so the renderer's range, depth and fog reach the LODs |
+| `mixins/distant_horizons/horizon-mixin.toml` | The bundle: two modules in the game and one in Horizon's library, seven HEAD hooks on Horizon's native hook points, one RETURN hook on the network events (`net::Session::poll`) that hands Distant Horizons' plugin channel messages to a small module in Horizon's library (`inbox.rs`), and one RETURN hook on `Game::terrain_distance`, so the renderer's range, depth and fog reach the LODs |
 | `tools/horizon.py` | Apply on the pinned Horizon, check, test inside the game, build, package the `.hnmod` |
 
 What was ported, Java class by class:
@@ -116,6 +122,10 @@ What was ported, Java class by class:
 | `ColumnBox`, `LodQuadBuilder` merging | `build_quads`, `merge_quads` |
 | `FullDataUpdatePropagatorV2`, `FullDataSourceProviderV2` | the engine's `Chunk` jobs and store |
 | SQLite repository | `storage`: one zlib file per section |
+| `MessageRegistry` and its messages, `SessionConfig`, `AbstractPluginPacketSender` | `net::Message`, `net::SessionConfig`, `net::encode`/`decode` |
+| `FullDataSourceV2DTO` (V1 and V2 formats), `FullDataPointIdMap.deserialize` | `net::decode_section`, `RemoteSection::into_source` |
+| `ClientNetworkState`, `AbstractFullDataNetworkRequestQueue`, `FullDataPayloadReceiver` | `net::Client` |
+| zstd-jni, lz4-java (`DhDataInputStream`) | `zstd`, `lz4`: decoders of their own, as a native mod adds no crates |
 
 Where it differs from Distant Horizons, and why:
 
@@ -128,9 +138,12 @@ Where it differs from Distant Horizons, and why:
   on the ground below would draw them as a carpet.
 - **Section files instead of SQLite**, in the same layout; the file is keyed to Horizon's block registry and
   remade when it changes.
-- Not ported (yet): Distant Horizons' own renderer and shaders (Horizon's draws the tiles), its networking and
-  server-side generation, the API, beacons and clouds, its config screens (replaced by the settings page and `/dh`),
-  and vertical-quality reduction.
+- **Server LODs are kept in memory**, as the rest of a server's LODs here, and asked for again each session.
+  Distant Horizons' adaptive transfer speed is not ported: the server's bandwidth limit applies as it is.
+  LZMA2-compressed data (a server set to it) can't be read; Zstandard (the default), LZ4 and uncompressed can.
+- Not ported (yet): Distant Horizons' own renderer and shaders (Horizon's draws the tiles), its server side (a
+  Horizon LAN host serves no LODs to Distant Horizons clients), the API, beacons and clouds, its config screens
+  (replaced by the settings page and `/dh`), and vertical-quality reduction.
 
 ## Build and test
 
